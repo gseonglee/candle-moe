@@ -1,0 +1,18 @@
+[package]
+name = "candle-moe"
+version = "0.0.1"
+edition = "2024"
+
+description = "MoE layer for the candle ML framework."
+keywords = ["tensor", "machine-learning"]
+categories = ["science"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+
+[dependencies]
+candle = { version = "0.*", package = "candle-core", features = ["cuda"]}
+half = { version = "2.3.1", features = ["num-traits"] }
+
+[build-dependencies]
+anyhow = { version = "1", features = ["backtrace"] }
+bindgen_cuda = "0.1.5"
