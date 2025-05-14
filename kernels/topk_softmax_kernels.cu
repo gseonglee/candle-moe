@@ -16,10 +16,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <torch/all.h>
-#include <ATen/cuda/CUDAContext.h>
-#include <c10/cuda/CUDAGuard.h>
-#include "cuda_compat.h"
 
 #ifndef USE_ROCM
     #include <cub/util_type.cuh>
@@ -28,6 +24,9 @@
     #include <hipcub/util_type.hpp>
     #include <hipcub/hipcub.hpp>
 #endif
+
+#include <cuda_fp16.h>
+#include <cuda_bf16.h>
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -430,7 +429,8 @@ void topkGatingSoftmaxKernelLauncher(
     const int num_tokens,
     const int num_experts,
     const int topk,
-    cudaStream_t stream) {
+    cudaStream_t stream
+) {
     static constexpr int WARPS_PER_TB = 4;
     switch (num_experts) {
         case 1:
@@ -461,14 +461,8 @@ void topkGatingSoftmaxKernelLauncher(
             LAUNCH_SOFTMAX(256, WARPS_PER_TB);
             break;
         default: {
-            TORCH_CHECK(softmax_workspace != nullptr,
-                "softmax_workspace must be provided for num_experts that are not a power of 2.");
-            static constexpr int TPB = 256;
-            moeSoftmax<TPB><<<num_tokens, TPB, 0, stream>>>(
-                gating_output, nullptr, softmax_workspace, num_experts);
-            moeTopK<TPB><<<num_tokens, TPB, 0, stream>>>(
-                softmax_workspace, nullptr, topk_weights, topk_indicies, token_expert_indices,
-                num_experts, topk, 0, num_experts);
+            LAUNCH_SOFTMAX(256, WARPS_PER_TB);
+            break;
         }
     }
 }
@@ -476,31 +470,26 @@ void topkGatingSoftmaxKernelLauncher(
 } // namespace moe
 } // namespace vllm
 
-void topk_softmax(
-    torch::Tensor& topk_weights,                // [num_tokens, topk]
-    torch::Tensor& topk_indices,                // [num_tokens, topk]
-    torch::Tensor& token_expert_indices,        // [num_tokens, topk]
-    torch::Tensor& gating_output)               // [num_tokens, num_experts]
-{
+extern "C" void topk_softmax(
+    void *topk_weights,                // [num_tokens, topk]
+    void *topk_indices,                // [num_tokens, topk]
+    void *token_expert_indices,        // [num_tokens, topk]
+    void *gating_output                // [num_tokens, num_experts]
+) {
     const int num_experts = gating_output.size(-1);
     const int num_tokens = gating_output.numel() / num_experts;
     const int topk = topk_weights.size(-1);
 
-    const bool is_pow_2 = (num_experts != 0) && ((num_experts & (num_experts - 1)) == 0);
-    const bool needs_workspace = !is_pow_2 || num_experts > 256;
-    const int64_t workspace_size = needs_workspace ? num_tokens * num_experts : 0;
+    const cudaStream_t stream = 0;
 
-    const at::cuda::OptionalCUDAGuard device_guard(device_of(gating_output));
-    const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-    torch::Tensor softmax_workspace = torch::empty({workspace_size}, gating_output.options());
     vllm::moe::topkGatingSoftmaxKernelLauncher(
-        gating_output.data_ptr<float>(),
-        topk_weights.data_ptr<float>(),
-        topk_indices.data_ptr<int>(),
-        token_expert_indices.data_ptr<int>(),
-        softmax_workspace.data_ptr<float>(),
+        gating_output,
+        topk_weights,
+        topk_indices,
+        token_expert_indices,
         num_tokens,
         num_experts,
         topk,
-        stream);
+        stream
+    );
 }

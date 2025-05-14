@@ -1,9 +1,5 @@
-#include <torch/all.h>
-#include <ATen/cuda/CUDAContext.h>
-#include <c10/cuda/CUDAGuard.h>
-
-#include <ATen/ATen.h>
-#include <ATen/cuda/Atomic.cuh>
+#include <cuda_fp16.h>
+#include <cuda_bf16.h>
 
 #include "cuda_compat.h"
 
@@ -426,45 +422,47 @@ void sgl_moe_align_block_size(torch::Tensor topk_ids, int64_t num_experts,
       });
 }
 
-void moe_sum(torch::Tensor& input,   // [num_tokens, topk, hidden_size]
-             torch::Tensor& output)  // [num_tokens, hidden_size]
-{
+#define CALL_MOE_SUM_KERNEL(T, TOPK)                               \
+  vllm::moe::moe_sum_kernel<T, TOPK><<<grid, block, 0, stream>>>(  \
+    reinterpret_cast<T*>(out),                                     \
+    reinterpret_cast<T*>(input),                                   \
+    d,                                                             \
+  );
+
+extern "C" void moe_sum(
+  void *input,              // [num_tokens, topk, hidden_size]
+  void *output,             // [num_tokens, hidden_size]
+
+  uint32_t dtype,           // 0 => f16; 1 => bf16; 2 => f32
+) {
   const int hidden_size = input.size(-1);
   const int num_tokens = output.numel() / hidden_size;
   const int topk = input.size(1);
 
   dim3 grid(num_tokens);
   dim3 block(std::min(hidden_size, 1024));
-  const at::cuda::OptionalCUDAGuard device_guard(device_of(output));
-  const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+  const cudaStream_t stream = 0;
 
   switch (topk) {
     case 2:
-      VLLM_DISPATCH_FLOATING_TYPES(input.scalar_type(), "moe_sum_kernel", [&] {
-        vllm::moe::moe_sum_kernel<scalar_t, 2><<<grid, block, 0, stream>>>(
-            output.data_ptr<scalar_t>(), input.data_ptr<scalar_t>(),
-            hidden_size);
-      });
-      break;
-
     case 3:
-      VLLM_DISPATCH_FLOATING_TYPES(input.scalar_type(), "moe_sum_kernel", [&] {
-        vllm::moe::moe_sum_kernel<scalar_t, 3><<<grid, block, 0, stream>>>(
-            output.data_ptr<scalar_t>(), input.data_ptr<scalar_t>(),
-            hidden_size);
-      });
-      break;
-
     case 4:
-      VLLM_DISPATCH_FLOATING_TYPES(input.scalar_type(), "moe_sum_kernel", [&] {
-        vllm::moe::moe_sum_kernel<scalar_t, 4><<<grid, block, 0, stream>>>(
-            output.data_ptr<scalar_t>(), input.data_ptr<scalar_t>(),
-            hidden_size);
-      });
+      if (dtype == 0) {
+        CALL_MOE_SUM_KERNEL(half, topk);
+      } else if (dtype == 1) {
+        CALL_MOE_SUM_KERNEL(__nv_bfloat16, topk);
+      } else {
+        CALL_MOE_SUM_KERNEL(float, topk);
+      }
       break;
-
     default:
-      at::sum_out(output, input, 1);
+      if (dtype == 0) {
+        CALL_MOE_SUM_KERNEL(half, 1);
+      } else if (dtype == 1) {
+        CALL_MOE_SUM_KERNEL(__nv_bfloat16, 1);
+      } else {
+        CALL_MOE_SUM_KERNEL(float, 1);
+      }
       break;
   }
 }
