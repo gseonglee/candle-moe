@@ -28,6 +28,8 @@
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
 
+#include "cuda_compat.h"
+
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
@@ -425,7 +427,6 @@ void topkGatingSoftmaxKernelLauncher(
     float* topk_weights,
     int* topk_indicies,
     int* token_expert_indices,
-    float* softmax_workspace,
     const int num_tokens,
     const int num_experts,
     const int topk,
@@ -474,19 +475,19 @@ extern "C" void topk_softmax(
     void *topk_weights,                // [num_tokens, topk]
     void *topk_indices,                // [num_tokens, topk]
     void *token_expert_indices,        // [num_tokens, topk]
-    void *gating_output                // [num_tokens, num_experts]
-) {
-    const int num_experts = gating_output.size(-1);
-    const int num_tokens = gating_output.numel() / num_experts;
-    const int topk = topk_weights.size(-1);
+    void *gating_output,               // [num_tokens, num_experts]
 
+    int32_t num_experts,
+    int64_t num_tokens,
+    int32_t topk
+) {
     const cudaStream_t stream = 0;
 
     vllm::moe::topkGatingSoftmaxKernelLauncher(
-        gating_output,
-        topk_weights,
-        topk_indices,
-        token_expert_indices,
+        reinterpret_cast<float*>(gating_output),
+        reinterpret_cast<float*>(topk_weights),
+        reinterpret_cast<int*>(topk_indices),
+        reinterpret_cast<int*>(token_expert_indices),
         num_tokens,
         num_experts,
         topk,

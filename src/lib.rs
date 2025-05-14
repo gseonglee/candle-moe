@@ -1,9 +1,8 @@
 mod ffi;
 
 use candle::cuda_backend::cudarc::driver::DevicePtr;
-use candle::{DType, Device, Result, Storage, Tensor};
+use candle::{DType, Result, Storage, Tensor};
 use half::{bf16, f16};
-use std::ffi::{c_int, c_long};
 
 pub fn apply_topk_softmax_<
     T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
@@ -34,13 +33,13 @@ pub fn apply_topk_softmax_<
     };
 
     let (ei, ei_l) = token_expert_indices.storage_and_layout();
-    let ei: &candle::CudaStorageei = match &*ei {
+    let ei: &candle::CudaStorage = match &*ei {
         Storage::Cuda(ei) => ei,
         _ => candle::bail!("token_expert_indices must be a cuda tensor"),
     };
 
     let (g, g_l) = gating_output.storage_and_layout();
-    let g: &candle::CudaStorageei = match &*g {
+    let g: &candle::CudaStorage = match &*g {
         Storage::Cuda(g) => g,
         _ => candle::bail!("gating_output must be a cuda tensor"),
     };
@@ -69,6 +68,7 @@ pub fn apply_topk_softmax_<
     let g = g.slice(g_l.start_offset()..);
 
     let (num_tokens, top_k) = w_l.shape().dims2()?;
+    let (_, num_experts) = g_l.shape().dims2()?;
 
     if (num_tokens, top_k) != i_l.shape().dims2()? {
         candle::bail!(
@@ -94,7 +94,17 @@ pub fn apply_topk_softmax_<
     let expert_indices_ptr = *ei.device_ptr() as *const core::ffi::c_void;
     let gate_ptr = *g.device_ptr() as *const core::ffi::c_void;
 
-    unsafe { ffi::topk_softmax(weight_ptr, indices_ptr, expert_indices_ptr, gate_ptr) }
+    unsafe {
+        ffi::topk_softmax(
+            weight_ptr,
+            indices_ptr,
+            expert_indices_ptr,
+            gate_ptr,
+            num_experts as i32,
+            num_tokens as i32,
+            top_k as i32,
+        )
+    }
 
     Ok(())
 }
