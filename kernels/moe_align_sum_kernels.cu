@@ -299,8 +299,7 @@ void moe_align_block_size(torch::Tensor topk_ids, int64_t num_experts,
                           int64_t block_size, torch::Tensor sorted_token_ids,
                           torch::Tensor experts_ids,
                           torch::Tensor num_tokens_post_pad) {
-  cudaStream_t stream;
-  cudaStreamCreate(&stream);
+  const cudaStream_t stream = 0;
 
   int device_max_shared_mem;
   auto dev = topk_ids.get_device();
