@@ -2,10 +2,10 @@ use core::ffi::{c_int, c_long, c_void};
 
 unsafe extern "C" {
     pub(crate) fn topk_softmax(
+        gating_output: *const c_void,
         topk_weight: *const c_void,
         topk_indices: *const c_void,
         token_expert_indices: *const c_void,
-        gating_output: *const c_void,
 
         num_experts: c_int,
         num_tokens: c_long,

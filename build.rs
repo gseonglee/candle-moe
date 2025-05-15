@@ -42,7 +42,7 @@ fn main() -> Result<()> {
         .kernel_paths(kernels)
         .out_dir(build_dir.clone())
         .arg("-std=c++17")
-        .arg("-O3")           
+        .arg("-O3")
         .arg("--compiler-options")
         .arg("-fPIC")
         .arg("-U__CUDA_NO_HALF_OPERATORS__")

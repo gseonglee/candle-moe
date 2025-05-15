@@ -472,10 +472,10 @@ void topkGatingSoftmaxKernelLauncher(
 } // namespace vllm
 
 extern "C" void topk_softmax(
+    void *gating_output,               // [num_tokens, num_experts]
     void *topk_weights,                // [num_tokens, topk]
     void *topk_indices,                // [num_tokens, topk]
     void *token_expert_indices,        // [num_tokens, topk]
-    void *gating_output,               // [num_tokens, num_experts]
 
     int32_t num_experts,
     int64_t num_tokens,
