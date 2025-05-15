@@ -12,7 +12,26 @@ unsafe extern "C" {
         topk: c_int,
     );
 
-    // pub(crate) fn moe_sum(input: *const c_void, output: *const c_void, dtype: u32);
+    pub(crate) fn moe_sum(
+        input: *const c_void,
+        output: *const c_void,
+        hidden_size: c_int,
+        num_token: c_long,
+        topk: c_int,
+        dtype: u32,
+    );
+
+    #[allow(dead_code)]
+    pub(crate) fn moe_align_block_size(
+        topk_ids: *const c_void,
+        num_experts: c_long,
+        block_size: c_long,
+        numel: c_long,
+        sorted_token_ids: *const c_void,
+        experts_ids: *const c_void,
+        num_tokens_post_pad: *const c_void,
+        dtype: u32,
+    );
 
     // pub(crate) fn moe_wna16_gemm(
     //     input: *const c_void,

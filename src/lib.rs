@@ -131,7 +131,93 @@ pub fn apply_topk_softmax_inplace(
             token_expert_indices,
         ),
         dt => {
-            candle::bail!("apply_topk_softmax is only supported for f32, f16 and bf16 ({dt:?})")
+            candle::bail!(
+                "apply_topk_softmax_inplace is only supported for f32, f16 and bf16 ({dt:?})"
+            )
+        }
+    }
+}
+
+pub fn apply_moe_sum_<
+    T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+>(
+    input: &Tensor,
+    output: &Tensor,
+    num_token: usize,
+    topk: usize,
+    dtype: u32,
+) -> Result<()> {
+    let (i, i_l) = input.storage_and_layout();
+    let i: &candle::CudaStorage = match &*i {
+        Storage::Cuda(i) => i,
+        _ => candle::bail!("input must be a cuda tensor"),
+    };
+
+    let (o, o_l) = output.storage_and_layout();
+    let o: &candle::CudaStorage = match &*o {
+        Storage::Cuda(o) => o,
+        _ => candle::bail!("output must be a cuda tensor"),
+    };
+
+    let i_rank = i_l.stride().len();
+    let o_rank = o_l.stride().len();
+
+    if i_rank != 3 {
+        candle::bail!("input should be rank 3 (input: {i_l:?})")
+    }
+
+    if o_rank != 2 {
+        candle::bail!("output should be rank 2 (input: {o_l:?})")
+    }
+
+    // Get cuda slices for all tensors
+    let i = i.as_cuda_slice::<T>()?;
+    let o = o.as_cuda_slice::<T>()?;
+
+    // Get cuda views for all tensors
+    let i = i.slice(i_l.start_offset()..);
+    let o = o.slice(o_l.start_offset()..);
+
+    let (num_tokens, _, hidden_size) = i_l.shape().dims3()?;
+
+    if (num_tokens, hidden_size) != o_l.shape().dims2()? {
+        candle::bail!(
+            "shape mismatch output {:?}, expected {:?}",
+            o_l.shape(),
+            (num_tokens, hidden_size)
+        )
+    }
+
+    let input_ptr = *i.device_ptr() as *const core::ffi::c_void;
+    let output_ptr = *o.device_ptr() as *const core::ffi::c_void;
+
+    unsafe {
+        ffi::moe_sum(
+            input_ptr,
+            output_ptr,
+            hidden_size as i32,
+            num_token as i32,
+            topk as i32,
+            dtype,
+        )
+    }
+
+    Ok(())
+}
+
+pub fn apply_moe_sum_inplace(
+    input: &Tensor,
+    output: &Tensor,
+    num_token: usize,
+    topk: usize,
+    dtype: u32,
+) -> Result<()> {
+    match input.dtype() {
+        DType::F16 => apply_moe_sum_::<f16>(input, output, num_token, topk, dtype),
+        DType::BF16 => apply_moe_sum_::<bf16>(input, output, num_token, topk, dtype),
+        DType::F32 => apply_moe_sum_::<f32>(input, output, num_token, topk, dtype),
+        dt => {
+            candle::bail!("apply_moe_sum_inplace is only supported for f32, f16 and bf16 ({dt:?})")
         }
     }
 }

@@ -4,9 +4,9 @@
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
-const KERNEL_FILES: [&str; 1] = [
+const KERNEL_FILES: [&str; 2] = [
     "kernels/topk_softmax_kernels.cu",
-    // "kernels/moe_align_sum_kernels.cu",
+    "kernels/moe_align_sum_kernels.cu",
     // "kernels/moe_wna16.cu",
 ];
 
