@@ -56,6 +56,8 @@ unsafe extern "C" {
         size_k: c_int,
         group_size: c_int,
         EM: c_long,
+        has_zp: bool,
+        mul_topk_weight: bool,
 
         dtype: u32,
     );

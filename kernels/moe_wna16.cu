@@ -1,7 +1,10 @@
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
 
+#include <cstdint>
+
 #include "moe_wna16_utils.h"
+#include "cuda_compat.h"
 
 #define DIVIDE(x, size) (((x) + (size) - 1) / (size))
 
@@ -270,30 +273,30 @@ void run_moe_wna16_gemm(const scalar_t* input, scalar_t* output,
       BLOCK_SIZE_K, has_zp, mul_topk_weight);
 }
 
-#define CALL_MOE_WNA16_GEMM(T)               \
-  run_moe_wna16_gemm<T>(                     \
-    reinterpret_cast<T*>(input),             \
-    reinterpret_cast<T*>(output),            \
-    reinterpret_cast<uint32_t*>(b_qweight),  \
-    reinterpret_cast<T*>(b_scales),          \
-    b_qzeros,                                \
-    topk_weights,                            \
-    sorted_token_ids,                        \
-    expert_ids,                              \
-    num_tokens_post_pad,                     \
-    num_experts,                             \
-    group_size,                              \ 
-    num_token_blocks,                        \ 
-    top_k,                                   \
-    size_m,                                  \
-    size_n,                                  \
-    size_k,                                  \
-    top_k,                                   \
-    BLOCK_SIZE_M,                            \
-    BLOCK_SIZE_N,                            \
-    BLOCK_SIZE_K,                            \
-    bit,                                     \
-    dtype);
+#define CALL_MOE_WNA16_GEMM(T)                        \
+  run_moe_wna16_gemm<T>(                              \
+    reinterpret_cast<T*>(input),                      \
+    reinterpret_cast<T*>(output),                     \
+    reinterpret_cast<uint32_t*>(b_qweight),           \
+    reinterpret_cast<T*>(b_scales),                   \
+    reinterpret_cast<uint32_t*>(b_qzeros),            \
+    reinterpret_cast<float*>(topk_weights),           \
+    reinterpret_cast<int32_t*>(sorted_token_ids),     \
+    reinterpret_cast<int32_t*>(expert_ids),           \
+    reinterpret_cast<int32_t*>(num_tokens_post_pad),  \
+    num_experts,                                      \
+    group_size,                                       \
+    num_token_blocks,                                 \
+    top_k,                                            \
+    size_m,                                           \
+    size_n,                                           \
+    size_k,                                           \
+    BLOCK_SIZE_M,                                     \
+    BLOCK_SIZE_N,                                     \
+    BLOCK_SIZE_K,                                     \
+    bit,                                              \
+    has_zp,                                           \
+    mul_topk_weight);
 
 extern "C" void moe_wna16_gemm(
   void *input,
@@ -316,26 +319,18 @@ extern "C" void moe_wna16_gemm(
   int32_t size_k,
   int32_t group_size,
   int64_t EM,
-  uint32_t dtype,                    // 0 => f16; 1 => bf16; 2 => f32
+  bool has_zp,
+  bool mul_topk_weight,
+  uint32_t dtype                     // 0 => f16; 1 => bf16; 2 => f32
 ) {
   if (size_m <= BLOCK_SIZE_M) {
     EM = min(EM, size_m * BLOCK_SIZE_M * top_k);
   }
   const int num_token_blocks = (EM + BLOCK_SIZE_M - 1) / BLOCK_SIZE_M;
 
-  const uint32_t* b_qzeros_ptr;
-  if (b_qzeros.has_value())
-    b_qzeros_ptr = (const uint32_t*)b_qzeros.value().data_ptr<uint8_t>();
-
-  const float* topk_weights_ptr;
-  if (topk_weights.has_value())
-    topk_weights_ptr = (const float*)topk_weights.value().data_ptr();
-
   if (dtype == 0) {
     CALL_MOE_WNA16_GEMM(half);
   } else if (dtype == 1) {
     CALL_MOE_WNA16_GEMM(__nv_bfloat16);
   }
-
-  return output;
 }

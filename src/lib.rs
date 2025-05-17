@@ -3,6 +3,7 @@ mod ffi;
 use candle::cuda_backend::cudarc::driver::DevicePtr;
 use candle::{DType, Result, Storage, Tensor};
 use half::{bf16, f16};
+use std::cmp::min;
 
 pub fn apply_topk_softmax_<
     T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
@@ -222,6 +223,59 @@ pub fn apply_moe_sum_inplace(
     }
 }
 
+fn get_moe_wna16_config(
+    num_valid_tokens: usize,
+    size_n: usize,
+    size_k: usize,
+    block_size_m: usize,
+    group_size: usize,
+    num_experts: usize,
+    top_k: usize,
+) -> (usize, usize) {
+    let mut block_size_n = 128;
+    let mut block_size_k = 128;
+
+    if block_size_k <= group_size {
+        block_size_k = group_size;
+    }
+
+    let num_n_blocks = size_k / block_size_k;
+    let num_k_blocks = size_n / block_size_k;
+    let mut num_m_blocks = num_valid_tokens.div_ceil(block_size_m) + num_experts;
+
+    if num_valid_tokens / top_k <= block_size_m {
+        num_m_blocks = min(num_m_blocks, num_valid_tokens)
+    }
+
+    let mut num_blocks = num_m_blocks * num_n_blocks * num_k_blocks;
+
+    if size_k % 256 == 0 && num_blocks >= 256 && block_size_k < 256 {
+        block_size_k = 256;
+        num_blocks /= 256 / block_size_k;
+    }
+
+    if num_m_blocks <= 16
+        && size_k % (block_size_k * 2) == 0
+        && block_size_k <= 512
+        && num_blocks >= 512
+    {
+        block_size_k *= 2;
+        num_blocks /= 2;
+    }
+
+    if num_blocks > 1024 {
+        block_size_n = 256;
+        num_blocks /= 2;
+    }
+
+    if size_n <= 1024 && num_blocks >= 1024 {
+        block_size_n = 1024
+    }
+
+    (block_size_n, block_size_k)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn apply_moe_wna16_gemm_<
     T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
 >(
@@ -267,7 +321,7 @@ pub fn apply_moe_wna16_gemm_<
         Storage::Cuda(qz) => qz,
         _ => candle::bail!("b_qzeros must be a cuda tensor"),
     };
-    
+
     let (tw, tw_l) = topk_weights.storage_and_layout();
     let tw: &candle::CudaStorage = match &*tw {
         Storage::Cuda(tw) => tw,
@@ -292,48 +346,65 @@ pub fn apply_moe_wna16_gemm_<
         _ => candle::bail!("num_tokens_post_pad must be a cuda tensor"),
     };
 
-    let i_rank = i_l.stride().len();
-    let o_rank = o_l.stride().len();
-
-    if i_rank != 3 {
-        candle::bail!("input should be rank 3 (input: {i_l:?})")
-    }
-
-    if o_rank != 2 {
-        candle::bail!("output should be rank 2 (input: {o_l:?})")
-    }
-
     // Get cuda slices for all tensors
     let i = i.as_cuda_slice::<T>()?;
     let o = o.as_cuda_slice::<T>()?;
+    let qw = qw.as_cuda_slice::<T>()?;
+    let s = s.as_cuda_slice::<T>()?;
 
     // Get cuda views for all tensors
     let i = i.slice(i_l.start_offset()..);
     let o = o.slice(o_l.start_offset()..);
+    let qw = qw.slice(qw_l.start_offset()..);
+    let s = s.slice(s_l.start_offset()..);
 
     let input_ptr = *i.device_ptr() as *const core::ffi::c_void;
     let output_ptr = *o.device_ptr() as *const core::ffi::c_void;
+    let b_qweight_ptr = *qw.device_ptr() as *const core::ffi::c_void;
+    let b_scales_ptr = *s.device_ptr() as *const core::ffi::c_void;
 
-    let (size_m, size_k) = input.dims2()?;
-    let (num_experts, size_n) = b_qweight.dims2()?;
-    let group_size = size_k / b_scales.dims()?[2];
-    let em = sorted_token_ids.dims()?[0];
+    let (size_m, size_k) = input.shape().dims2()?;
+    let (num_experts, size_n) = b_qweight.shape().dims2()?;
+    let (_, _, x) = b_scales.shape().dims3()?;
+    let group_size = size_k / x;
+    let (em, _) = sorted_token_ids.shape().dims2()?;
+    let block_size_m = 64;
+    let num_token = size_m * top_k;
+
+    let (block_size_n, block_size_k) = get_moe_wna16_config(
+        num_token,
+        size_n,
+        size_k,
+        block_size_m,
+        group_size,
+        num_experts,
+        top_k,
+    );
 
     unsafe {
         ffi::moe_wna16_gemm(
             input_ptr,
             output_ptr,
-            top_k,
-            64,
-            128,
-            128,
-            bit,
-            num_experts,
-            size_m,
-            size_n,
-            size_k,
-            group_size,
-            em,
+            b_qweight_ptr,
+            b_scales_ptr,
+            b_qweight_ptr,
+            b_qweight_ptr,
+            b_qweight_ptr,
+            b_qweight_ptr,
+            b_qweight_ptr,
+            top_k as i64,
+            block_size_m as i64,
+            block_size_n as i64,
+            block_size_k as i64,
+            bit as i64,
+            num_experts as i32,
+            size_m as i32,
+            size_n as i32,
+            size_k as i32,
+            group_size as i32,
+            em as i64,
+            false,
+            false,
             dtype,
         )
     }
@@ -341,6 +412,7 @@ pub fn apply_moe_wna16_gemm_<
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn apply_moe_wna16_gemm_inplace(
     input: &Tensor,
     output: &Tensor,
@@ -356,10 +428,38 @@ pub fn apply_moe_wna16_gemm_inplace(
     dtype: u32,
 ) -> Result<()> {
     match input.dtype() {
-        DType::F16 => apply_moe_wna16_gemm_::<f16>(input, output, b_qweight, b_scales, b_qzeros, topk_weights, sorted_token_ids, expert_ids, num_tokens_post_pad, top_k, bit, dtype),
-        DType::BF16 => apply_moe_wna16_gemm_::<f16>(input, output, b_qweight, b_scales, b_qzeros, topk_weights, sorted_token_ids, expert_ids, num_tokens_post_pad, top_k, bit, dtype),
+        DType::F16 => apply_moe_wna16_gemm_::<f16>(
+            input,
+            output,
+            b_qweight,
+            b_scales,
+            b_qzeros,
+            topk_weights,
+            sorted_token_ids,
+            expert_ids,
+            num_tokens_post_pad,
+            top_k,
+            bit,
+            dtype,
+        ),
+        DType::BF16 => apply_moe_wna16_gemm_::<f16>(
+            input,
+            output,
+            b_qweight,
+            b_scales,
+            b_qzeros,
+            topk_weights,
+            sorted_token_ids,
+            expert_ids,
+            num_tokens_post_pad,
+            top_k,
+            bit,
+            dtype,
+        ),
         dt => {
-            candle::bail!("apply_moe_wna16_gemm_inplace is only supported for f16 and bf16 ({dt:?})")
+            candle::bail!(
+                "apply_moe_wna16_gemm_inplace is only supported for f16 and bf16 ({dt:?})"
+            )
         }
     }
 }
