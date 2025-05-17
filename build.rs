@@ -4,10 +4,10 @@
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
-const KERNEL_FILES: [&str; 2] = [
+const KERNEL_FILES: [&str; 3] = [
     "kernels/topk_softmax_kernels.cu",
     "kernels/moe_align_sum_kernels.cu",
-    // "kernels/moe_wna16.cu",
+    "kernels/moe_wna16.cu",
 ];
 
 fn main() -> Result<()> {
@@ -43,8 +43,8 @@ fn main() -> Result<()> {
         .out_dir(build_dir.clone())
         .arg("-std=c++17")
         .arg("-O3")
-        .arg("--compiler-options")
-        .arg("-fPIC")
+        // .arg("--compiler-options")
+        // .arg("-fPIC")
         .arg("-U__CUDA_NO_HALF_OPERATORS__")
         .arg("-U__CUDA_NO_HALF_CONVERSIONS__")
         .arg("-U__CUDA_NO_HALF2_OPERATORS__")
@@ -61,7 +61,7 @@ fn main() -> Result<()> {
     println!("cargo:rustc-link-search={}", build_dir.display());
     println!("cargo:rustc-link-lib=moe");
     println!("cargo:rustc-link-lib=dylib=cudart");
-    // println!("cargo:rustc-link-lib=dylib=stdc++");
+    println!("cargo:rustc-link-lib=dylib=stdc++");
 
     Ok(())
 }

@@ -310,15 +310,14 @@ extern "C" void moe_wna16_gemm(
   int64_t BLOCK_SIZE_N,
   int64_t BLOCK_SIZE_K,
   int64_t bit,
+  int32_t num_experts,
+  int32_t size_m,
+  int32_t size_n,
+  int32_t size_k,
+  int32_t group_size,
+  int64_t EM,
   uint32_t dtype,                    // 0 => f16; 1 => bf16; 2 => f32
 ) {
-  const int num_experts = b_qweight.size(0);
-  const int size_m = input.size(0);
-  const int size_n = b_qweight.size(1);
-  const int size_k = input.size(1);
-  const int group_size = size_k / b_scales.size(2);
-
-  int64_t EM = sorted_token_ids.size(0);
   if (size_m <= BLOCK_SIZE_M) {
     EM = min(EM, size_m * BLOCK_SIZE_M * top_k);
   }

@@ -33,23 +33,30 @@ unsafe extern "C" {
         dtype: u32,
     );
 
-    // pub(crate) fn moe_wna16_gemm(
-    //     input: *const c_void,
-    //     output: *const c_void,
-    //     b_qweight: *const c_void,
-    //     b_scales: *const c_void,
-    //     b_qzeros: *const c_void,
-    //     topk_weights: *const c_void,
-    //     sorted_token_ids: *const c_void,
-    //     expert_ids: *const c_void,
-    //     num_tokens_post_pad: *const c_void,
+    pub(crate) fn moe_wna16_gemm(
+        input: *const c_void,
+        output: *const c_void,
+        b_qweight: *const c_void,
+        b_scales: *const c_void,
+        b_qzeros: *const c_void,
+        topk_weights: *const c_void,
+        sorted_token_ids: *const c_void,
+        expert_ids: *const c_void,
+        num_tokens_post_pad: *const c_void,
 
-    //     top_k: c_long,
-    //     BLOCK_SIZE_M: c_long,
-    //     BLOCK_SIZE_N: c_long,
-    //     BLOCK_SIZE_K: c_long,
-    //     bit: c_long,
+        top_k: c_long,
+        BLOCK_SIZE_M: c_long,
+        BLOCK_SIZE_N: c_long,
+        BLOCK_SIZE_K: c_long,
+        bit: c_long,
 
-    //     dtype: u32,
-    // );
+        num_experts: c_int,
+        size_m: c_int,
+        size_n: c_int,
+        size_k: c_int,
+        group_size: c_int,
+        EM: c_long,
+
+        dtype: u32,
+    );
 }

@@ -97,7 +97,7 @@ pub fn apply_topk_softmax_<
             indices_ptr,
             expert_indices_ptr,
             num_experts as i32,
-            num_tokens as i32,
+            num_tokens as i64,
             top_k as i32,
         )
     }
@@ -196,7 +196,7 @@ pub fn apply_moe_sum_<
             input_ptr,
             output_ptr,
             hidden_size as i32,
-            num_token as i32,
+            num_token as i64,
             topk as i32,
             dtype,
         )
@@ -218,6 +218,148 @@ pub fn apply_moe_sum_inplace(
         DType::F32 => apply_moe_sum_::<f32>(input, output, num_token, topk, dtype),
         dt => {
             candle::bail!("apply_moe_sum_inplace is only supported for f32, f16 and bf16 ({dt:?})")
+        }
+    }
+}
+
+pub fn apply_moe_wna16_gemm_<
+    T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
+>(
+    input: &Tensor,
+    output: &Tensor,
+    b_qweight: &Tensor,
+    b_scales: &Tensor,
+    b_qzeros: &Tensor,
+    topk_weights: &Tensor,
+    sorted_token_ids: &Tensor,
+    expert_ids: &Tensor,
+    num_tokens_post_pad: &Tensor,
+    top_k: usize,
+    bit: usize,
+    dtype: u32,
+) -> Result<()> {
+    let (i, i_l) = input.storage_and_layout();
+    let i: &candle::CudaStorage = match &*i {
+        Storage::Cuda(i) => i,
+        _ => candle::bail!("input must be a cuda tensor"),
+    };
+
+    let (o, o_l) = output.storage_and_layout();
+    let o: &candle::CudaStorage = match &*o {
+        Storage::Cuda(o) => o,
+        _ => candle::bail!("output must be a cuda tensor"),
+    };
+
+    let (qw, qw_l) = b_qweight.storage_and_layout();
+    let qw: &candle::CudaStorage = match &*qw {
+        Storage::Cuda(qw) => qw,
+        _ => candle::bail!("b_qweight must be a cuda tensor"),
+    };
+
+    let (s, s_l) = b_scales.storage_and_layout();
+    let s: &candle::CudaStorage = match &*s {
+        Storage::Cuda(s) => s,
+        _ => candle::bail!("b_scales must be a cuda tensor"),
+    };
+
+    let (qz, qz_l) = b_qzeros.storage_and_layout();
+    let qz: &candle::CudaStorage = match &*qz {
+        Storage::Cuda(qz) => qz,
+        _ => candle::bail!("b_qzeros must be a cuda tensor"),
+    };
+    
+    let (tw, tw_l) = topk_weights.storage_and_layout();
+    let tw: &candle::CudaStorage = match &*tw {
+        Storage::Cuda(tw) => tw,
+        _ => candle::bail!("topk_weights must be a cuda tensor"),
+    };
+
+    let (sti, sti_l) = sorted_token_ids.storage_and_layout();
+    let sti: &candle::CudaStorage = match &*sti {
+        Storage::Cuda(sti) => sti,
+        _ => candle::bail!("sorted_token_ids must be a cuda tensor"),
+    };
+
+    let (ei, ei_l) = expert_ids.storage_and_layout();
+    let ei: &candle::CudaStorage = match &*ei {
+        Storage::Cuda(ei) => ei,
+        _ => candle::bail!("expert_ids must be a cuda tensor"),
+    };
+
+    let (nt, nt_l) = num_tokens_post_pad.storage_and_layout();
+    let nt: &candle::CudaStorage = match &*nt {
+        Storage::Cuda(nt) => nt,
+        _ => candle::bail!("num_tokens_post_pad must be a cuda tensor"),
+    };
+
+    let i_rank = i_l.stride().len();
+    let o_rank = o_l.stride().len();
+
+    if i_rank != 3 {
+        candle::bail!("input should be rank 3 (input: {i_l:?})")
+    }
+
+    if o_rank != 2 {
+        candle::bail!("output should be rank 2 (input: {o_l:?})")
+    }
+
+    // Get cuda slices for all tensors
+    let i = i.as_cuda_slice::<T>()?;
+    let o = o.as_cuda_slice::<T>()?;
+
+    // Get cuda views for all tensors
+    let i = i.slice(i_l.start_offset()..);
+    let o = o.slice(o_l.start_offset()..);
+
+    let input_ptr = *i.device_ptr() as *const core::ffi::c_void;
+    let output_ptr = *o.device_ptr() as *const core::ffi::c_void;
+
+    let (size_m, size_k) = input.dims2()?;
+    let (num_experts, size_n) = b_qweight.dims2()?;
+    let group_size = size_k / b_scales.dims()?[2];
+    let em = sorted_token_ids.dims()?[0];
+
+    unsafe {
+        ffi::moe_wna16_gemm(
+            input_ptr,
+            output_ptr,
+            top_k,
+            64,
+            128,
+            128,
+            bit,
+            num_experts,
+            size_m,
+            size_n,
+            size_k,
+            group_size,
+            em,
+            dtype,
+        )
+    }
+
+    Ok(())
+}
+
+pub fn apply_moe_wna16_gemm_inplace(
+    input: &Tensor,
+    output: &Tensor,
+    b_qweight: &Tensor,
+    b_scales: &Tensor,
+    b_qzeros: &Tensor,
+    topk_weights: &Tensor,
+    sorted_token_ids: &Tensor,
+    expert_ids: &Tensor,
+    num_tokens_post_pad: &Tensor,
+    top_k: usize,
+    bit: usize,
+    dtype: u32,
+) -> Result<()> {
+    match input.dtype() {
+        DType::F16 => apply_moe_wna16_gemm_::<f16>(input, output, b_qweight, b_scales, b_qzeros, topk_weights, sorted_token_ids, expert_ids, num_tokens_post_pad, top_k, bit, dtype),
+        DType::BF16 => apply_moe_wna16_gemm_::<f16>(input, output, b_qweight, b_scales, b_qzeros, topk_weights, sorted_token_ids, expert_ids, num_tokens_post_pad, top_k, bit, dtype),
+        dt => {
+            candle::bail!("apply_moe_wna16_gemm_inplace is only supported for f16 and bf16 ({dt:?})")
         }
     }
 }

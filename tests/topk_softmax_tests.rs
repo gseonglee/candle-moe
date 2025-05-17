@@ -1,6 +1,7 @@
 use anyhow::Result;
 use candle::{DType, Device, Tensor};
 use candle_transformers::models::deepseek2::{TopKLastDimOp, TopKOutput};
+use std::time::Instant;
 
 fn to_vec2_round(t: Tensor, digits: i32) -> Result<Vec<Vec<f32>>> {
     let b = 10f32.powi(digits);
@@ -25,6 +26,7 @@ fn topk_softmax() -> Result<()> {
     let top_k = 2;
 
     let weights = Tensor::randn(0.0, 1.0, (seq_len, num_experts), &device)?.to_dtype(DType::F32)?;
+
     let softmax_weights = candle_nn::ops::softmax_last_dim(&weights)?;
 
     let TopKOutput {

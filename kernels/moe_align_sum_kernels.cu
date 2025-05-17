@@ -1,6 +1,8 @@
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
 
+#include <cstdint>
+
 #include "cuda_compat.h"
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
